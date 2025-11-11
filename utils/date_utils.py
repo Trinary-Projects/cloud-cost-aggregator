@@ -46,7 +46,7 @@ def get_date_range(
 
     # Calculate end date (T-2 by default)
     if end_date is None:
-        end_date = today - datetime.timedelta(days=lookback_days)
+        end_date = today - datetime.timedelta(days=1)
 
     # Calculate start date
     if start_date is None:
@@ -55,7 +55,7 @@ def get_date_range(
             start_date = end_date - datetime.timedelta(days=backfill_days)
         else:
             # Daily mode: same as end_date (single day)
-            start_date = end_date
+            start_date = end_date - datetime.timedelta(days=3)
 
     return start_date, end_date
 
