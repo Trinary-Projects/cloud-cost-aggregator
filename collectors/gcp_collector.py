@@ -1,7 +1,7 @@
 """
 GCP BigQuery Billing Export collector
 """
-from datetime import date
+from datetime import date, timedelta
 from typing import List
 from decimal import Decimal
 import os
@@ -122,27 +122,67 @@ class GCPCollector(BaseCollector):
 
         try:
             # Query BigQuery billing export for daily service-level costs
-            # The table name pattern is: gcp_billing_export_v1_<BILLING_ACCOUNT_ID>
-            # We use wildcard to match all tables
+            # This query properly handles CUD costs, savings programs, and credits
+            # Costs take a few hours to show up in BigQuery export, might take longer than 24 hours
+
+            # Format dates for the query (YYYY-MM-DD format with timezone)
+            start_datetime = f"{start_date.strftime('%Y-%m-%d')}T00:00:00 US/Pacific"
+            # Add one day to end_date for exclusive upper bound
+            end_datetime = f"{(end_date + timedelta(days=1)).strftime('%Y-%m-%d')}T00:00:00 US/Pacific"
+
             query = f"""
-                SELECT
-                    DATE(usage_start_time) as usage_date,
-                    service.description as service_name,
-                    SUM(cost) as cost_usd
-                FROM
+                WITH
+                  spend_cud_fee_skus AS (
+                  SELECT
+                    *
+                  FROM
+                    UNNEST(['']) AS fee_sku_id ),
+                  cost_data AS (
+                  SELECT
+                    *,
+                  IF
+                    (sku.id IN (
+                      SELECT
+                        *
+                      FROM
+                        spend_cud_fee_skus), cost, 0) AS `spend_cud_fee_cost`,
+                    cost - IFNULL(cost_at_effective_price_default, cost) AS `spend_cud_savings`,
+                    IFNULL(cost_at_effective_price_default, cost) - cost_at_list AS `negotiated_savings`,
+                    IFNULL( (
+                      SELECT
+                        SUM(CAST(c.amount AS NUMERIC))
+                      FROM
+                        UNNEST(credits) c
+                      WHERE
+                        c.type IN ('')), 0) AS `cud_credits`,
+                    IFNULL( (
+                      SELECT
+                        SUM(CAST(c.amount AS NUMERIC))
+                      FROM
+                        UNNEST(credits) c
+                      WHERE
+                        c.type IN ('')), 0) AS `other_savings`
+                  FROM
                     `{self.config.project_id}.{self.config.bigquery_dataset}.gcp_billing_export_v1_*`
-                WHERE
-                    DATE(usage_start_time) >= '{start_date}'
-                    AND DATE(usage_start_time) <= '{end_date}'
-                    AND cost > 0
+                  WHERE
+                    cost_type != 'tax'
+                    AND cost_type != 'adjustment'
+                    AND usage_start_time >= '{start_datetime}'
+                    AND usage_start_time < '{end_datetime}' )
+                SELECT
+                  DATE(TIMESTAMP_TRUNC(usage_start_time, Day, 'US/Pacific')) AS usage_date,
+                  service.description AS service_name,
+                  SUM(CAST(IFNULL(cost_at_effective_price_default, cost) AS NUMERIC)) - SUM(CAST(spend_cud_fee_cost AS NUMERIC)) AS cost_usd
+                FROM
+                  cost_data
                 GROUP BY
-                    usage_date,
-                    service_name
+                  usage_date,
+                  service_name
                 HAVING
-                    cost_usd > 0
+                  cost_usd > 0
                 ORDER BY
-                    usage_date,
-                    cost_usd DESC
+                  usage_date DESC,
+                  cost_usd DESC
             """
 
             self.logger.debug(f"Executing BigQuery query: {query}")
