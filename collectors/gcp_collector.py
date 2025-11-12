@@ -172,8 +172,8 @@ class GCPCollector(BaseCollector):
                 SELECT
                   DATE(TIMESTAMP_TRUNC(usage_start_time, Day, 'US/Pacific')) AS usage_date,
                   service.description AS service_name,
-                  (SUM(CAST(IFNULL(cost_at_effective_price_default, cost) AS NUMERIC)) - SUM(CAST(spend_cud_fee_cost AS NUMERIC)))
-                    / MAX(currency_conversion_rate) AS cost_usd
+                  (SUM(CAST(cost AS NUMERIC)) + SUM(CAST(cud_credits AS NUMERIC)) + SUM(CAST(other_savings AS NUMERIC)))
+                    / (MAX(currency_conversion_rate) * 1.0) AS cost_usd
                 FROM
                   cost_data
                 GROUP BY
