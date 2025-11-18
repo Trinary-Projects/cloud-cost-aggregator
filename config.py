@@ -5,6 +5,7 @@ Loads settings from environment variables
 import os
 from dataclasses import dataclass
 from dotenv import load_dotenv
+from utils.aws_ssm import get_ssm_parameter
 
 # Load environment variables from .env file
 load_dotenv()
@@ -105,13 +106,25 @@ class Config:
 
     @staticmethod
     def _load_azure_config() -> AzureConfig:
-        """Load Azure configuration from environment"""
+        """Load Azure configuration from environment and AWS SSM"""
+        # Fetch sponsorship cookies from AWS Systems Manager
+        sponsorship_cookies = ''
+        try:
+            sponsorship_cookies = get_ssm_parameter('/cloud_cost_aggregator/AZURE_SPONSORSHIP_COOKIES')
+        except Exception as e:
+            # Log warning but continue - will fail validation later if cookies are truly required
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to fetch AZURE_SPONSORSHIP_COOKIES from AWS SSM: {e}")
+            # Fallback to environment variable if SSM fetch fails
+            sponsorship_cookies = os.getenv('AZURE_SPONSORSHIP_COOKIES', '')
+
         return AzureConfig(
             tenant_id=os.getenv('AZURE_TENANT_ID', ''),
             client_id=os.getenv('AZURE_CLIENT_ID', ''),
             client_secret=os.getenv('AZURE_CLIENT_SECRET', ''),
             subscription_id=os.getenv('AZURE_SUBSCRIPTION_ID', ''),
-            sponsorship_cookies=os.getenv('AZURE_SPONSORSHIP_COOKIES', '')
+            sponsorship_cookies=sponsorship_cookies
         )
 
     @staticmethod
