@@ -26,7 +26,7 @@ def get_ssm_parameter(parameter_name: str) -> Optional[str]:
         session_kwargs = {
             'aws_access_key_id': os.getenv('AWS_ACCESS_KEY_ID'),
             'aws_secret_access_key': os.getenv('AWS_SECRET_ACCESS_KEY'),
-            'region_name': os.getenv('AWS_REGION', 'us-east-1')
+            'region_name': os.getenv('ap-south-1')
         }
 
         # Create SSM client
