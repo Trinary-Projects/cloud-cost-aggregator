@@ -32,6 +32,12 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        '--backfill-days',
+        type=int,
+        help='Number of days to backfill (implies --backfill if set)'
+    )
+
+    parser.add_argument(
         '--start-date',
         type=str,
         help='Start date in YYYY-MM-DD format (overrides default T-2)'
@@ -150,11 +156,16 @@ def main():
             logger.error(f"Invalid end date format: {args.end_date}. Use YYYY-MM-DD")
             sys.exit(1)
 
+    # Determine backfill settings
+    # --backfill-days implies --backfill mode
+    backfill_enabled = args.backfill or args.backfill_days is not None
+    backfill_days = args.backfill_days if args.backfill_days is not None else config.app.backfill_days
+
     # Get date range
     start_date, end_date = get_date_range(
-        backfill=args.backfill,
+        backfill=backfill_enabled,
         lookback_days=config.app.lookback_days,
-        backfill_days=config.app.backfill_days,
+        backfill_days=backfill_days,
         start_date=start_date,
         end_date=end_date
     )
