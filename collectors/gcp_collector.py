@@ -35,6 +35,20 @@ class GCPCollector(BaseCollector):
         self.client = None
         self._initialize_client()
 
+    @property
+    def _billing_table_path(self) -> str:
+        """Return the wildcard table path for billing export tables."""
+        return (
+            f"{self.config.billing_export_project_id}."
+            f"{self.config.bigquery_dataset}."
+            "gcp_billing_export_v1_*"
+        )
+
+    @property
+    def _billing_table_suffix(self) -> str:
+        """Billing export tables replace dashes in account IDs with underscores."""
+        return self.config.billing_account_id.replace('-', '_')
+
     def _initialize_client(self):
         """Initialize GCP BigQuery client"""
         try:
@@ -48,7 +62,7 @@ class GCPCollector(BaseCollector):
             )
 
             self.client = bigquery.Client(
-                project=self.config.project_id,
+                project=self.config.billing_export_project_id,
                 credentials=credentials
             )
             self.logger.info("GCP BigQuery client initialized")
@@ -66,13 +80,13 @@ class GCPCollector(BaseCollector):
         try:
             # First check if dataset exists
             dataset_ref = self.client.get_dataset(
-                f"{self.config.project_id}.{self.config.bigquery_dataset}"
+                f"{self.config.billing_export_project_id}.{self.config.bigquery_dataset}"
             )
             self.logger.info(f"GCP BigQuery dataset '{self.config.bigquery_dataset}' exists")
 
             # Try to list tables in the dataset
             tables = list(self.client.list_tables(
-                f"{self.config.project_id}.{self.config.bigquery_dataset}"
+                f"{self.config.billing_export_project_id}.{self.config.bigquery_dataset}"
             ))
 
             if not tables:
@@ -83,10 +97,20 @@ class GCPCollector(BaseCollector):
                 )
                 return True  # Dataset exists, just waiting for data
 
+            expected_table = f"gcp_billing_export_v1_{self._billing_table_suffix}"
+            if not any(table.table_id == expected_table for table in tables):
+                self.logger.warning(
+                    f"GCP billing export table '{expected_table}' was not found in "
+                    f"{self.config.billing_export_project_id}.{self.config.bigquery_dataset}. "
+                    "Verify the billing account ID and export destination."
+                )
+
             # Try to query the billing export table
             query = f"""
                 SELECT COUNT(*) as count
-                FROM `{self.config.project_id}.{self.config.bigquery_dataset}.gcp_billing_export_v1_*`
+                FROM `{self._billing_table_path}`
+                WHERE _TABLE_SUFFIX = '{self._billing_table_suffix}'
+                  AND billing_account_id = '{self.config.billing_account_id}'
                 LIMIT 1
             """
 
@@ -129,6 +153,9 @@ class GCPCollector(BaseCollector):
             start_datetime = f"{start_date.strftime('%Y-%m-%d')}T00:00:00 US/Pacific"
             # Add one day to end_date for exclusive upper bound
             end_datetime = f"{(end_date + timedelta(days=1)).strftime('%Y-%m-%d')}T00:00:00 US/Pacific"
+            project_filter = ""
+            if self.config.cost_project_id:
+                project_filter = f"\n                    AND project.id = '{self.config.cost_project_id}'"
 
             query = f"""
                 WITH
@@ -163,12 +190,14 @@ class GCPCollector(BaseCollector):
                       WHERE
                         c.type IN ('SUSTAINED_USAGE_DISCOUNT', 'DISCOUNT')), 0) AS `other_savings`
                   FROM
-                    `{self.config.project_id}.{self.config.bigquery_dataset}.gcp_billing_export_v1_*`
+                    `{self._billing_table_path}`
                   WHERE
-                    cost_type != 'tax'
+                    _TABLE_SUFFIX = '{self._billing_table_suffix}'
+                    AND billing_account_id = '{self.config.billing_account_id}'
+                    AND cost_type != 'tax'
                     AND cost_type != 'adjustment'
                     AND usage_start_time >= '{start_datetime}'
-                    AND usage_start_time < '{end_datetime}' )
+                    AND usage_start_time < '{end_datetime}'{project_filter} )
                 SELECT
                   DATE(TIMESTAMP_TRUNC(usage_start_time, Day, 'US/Pacific')) AS usage_date,
                   service.description AS service_name,

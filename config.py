@@ -39,9 +39,10 @@ class AWSConfig:
 class GCPConfig:
     """GCP configuration"""
     billing_account_id: str
-    project_id: str
+    billing_export_project_id: str  # BigQuery project that hosts the billing export dataset
     credentials_path: str
     bigquery_dataset: str  # BigQuery dataset for billing export (e.g., "billing_export")
+    cost_project_id: str  # Optional GCP project to scope costs to
 
 
 @dataclass
@@ -99,10 +100,14 @@ class Config:
         """Load GCP configuration from environment"""
         return GCPConfig(
             billing_account_id=os.getenv('GCP_BILLING_ACCOUNT_ID', ''),
-            project_id=os.getenv('GCP_PROJECT_ID', ''),
+            billing_export_project_id=os.getenv(
+                'GCP_BILLING_EXPORT_PROJECT_ID',
+                os.getenv('GCP_PROJECT_ID', '')
+            ),
             credentials_path=os.getenv('GCP_CREDENTIALS_PATH',
                                       os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')),
-            bigquery_dataset=os.getenv('GCP_BIGQUERY_DATASET', 'billing_export')
+            bigquery_dataset=os.getenv('GCP_BIGQUERY_DATASET', 'billing_export'),
+            cost_project_id=os.getenv('GCP_COST_PROJECT_ID', '')
         )
 
     @staticmethod
@@ -155,8 +160,8 @@ class Config:
         # Validate GCP config
         if not self.gcp.billing_account_id:
             errors.append("GCP_BILLING_ACCOUNT_ID is required")
-        if not self.gcp.project_id:
-            errors.append("GCP_PROJECT_ID is required")
+        if not self.gcp.billing_export_project_id:
+            errors.append("GCP_BILLING_EXPORT_PROJECT_ID or GCP_PROJECT_ID is required")
         if not self.gcp.credentials_path:
             errors.append("GCP_CREDENTIALS_PATH or GOOGLE_APPLICATION_CREDENTIALS is required")
 

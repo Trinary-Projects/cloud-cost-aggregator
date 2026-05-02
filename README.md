@@ -118,9 +118,10 @@ AWS_REGION=us-east-1
 
 # GCP Credentials
 GCP_BILLING_ACCOUNT_ID=XXXXXX-YYYYYY-ZZZZZZ
-GCP_PROJECT_ID=your-project-id
+GCP_BILLING_EXPORT_PROJECT_ID=your-billing-export-project-id
 GCP_CREDENTIALS_PATH=/path/to/service-account.json
 GCP_BIGQUERY_DATASET=billing_export
+GCP_COST_PROJECT_ID=your-claude-project-id
 
 # Azure Credentials
 AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -173,6 +174,8 @@ Then in GCP Console:
 - Go to **Billing → Billing export → BigQuery export**
 - Enable "Detailed usage cost" export
 - Set dataset to: `billing_export`
+- Choose the Cloud Billing account that pays for your Claude project
+- Store the export in the BigQuery project configured as `GCP_BILLING_EXPORT_PROJECT_ID`
 
 2. **Create service account and grant permissions**:
 
@@ -182,20 +185,26 @@ gcloud iam service-accounts create cloud-cost-reader \
   --display-name="Cloud Cost Reader"
 
 # Grant BigQuery permissions
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member="serviceAccount:cloud-cost-reader@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding YOUR_BILLING_EXPORT_PROJECT_ID \
+  --member="serviceAccount:cloud-cost-reader@YOUR_BILLING_EXPORT_PROJECT_ID.iam.gserviceaccount.com" \
   --role="roles/bigquery.user"
 
-gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
-  --member="serviceAccount:cloud-cost-reader@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding YOUR_BILLING_EXPORT_PROJECT_ID \
+  --member="serviceAccount:cloud-cost-reader@YOUR_BILLING_EXPORT_PROJECT_ID.iam.gserviceaccount.com" \
   --role="roles/bigquery.dataViewer"
 
 # Create and download key
 gcloud iam service-accounts keys create gcp-credentials.json \
-  --iam-account=cloud-cost-reader@YOUR_PROJECT_ID.iam.gserviceaccount.com
+  --iam-account=cloud-cost-reader@YOUR_BILLING_EXPORT_PROJECT_ID.iam.gserviceaccount.com
 ```
 
 3. **Update `.env`** with the path to `gcp-credentials.json`
+
+**Important**:
+- `GCP_BILLING_EXPORT_PROJECT_ID` is the BigQuery project that hosts the billing export dataset. This is what the code queries.
+- `GCP_BILLING_ACCOUNT_ID` identifies which billing account table to read from inside that dataset.
+- `GCP_COST_PROJECT_ID` should be set to the actual Claude workload project if you want costs scoped to one GCP project instead of every project attached to the billing account.
+- `GCP_PROJECT_ID` is still supported as a backward-compatible alias for `GCP_BILLING_EXPORT_PROJECT_ID`.
 
 **Note**: It can take up to 24 hours for billing data to appear in BigQuery after enabling export.
 
