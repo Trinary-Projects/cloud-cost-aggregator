@@ -65,11 +65,12 @@ AWS_SECRET_ACCESS_KEY=your-secret-key
 AWS_REGION=us-east-1
 
 # GCP Credentials
-GCP_BILLING_ACCOUNT_ID=XXXXXX-YYYYYY-ZZZZZZ
+GCP_BILLING_ACCOUNT_IDS=XXXXXX-YYYYYY-ZZZZZZ,AAAAAA-BBBBBB-CCCCCC
 GCP_BILLING_EXPORT_PROJECT_ID=your-billing-export-project-id
 GCP_CREDENTIALS_PATH=./gke-credentials.json
 GCP_BIGQUERY_DATASET=billing_export
-GCP_COST_PROJECT_ID=your-claude-project-id
+GCP_COST_PROJECT_IDS=your-claude-project-id,another-project-id
+GCP_PROJECT_BILLING_ACCOUNT_MAP=your-claude-project-id:XXXXXX-YYYYYY-ZZZZZZ,another-project-id:AAAAAA-BBBBBB-CCCCCC
 
 # Azure Credentials
 AZURE_TENANT_ID=your-tenant-id

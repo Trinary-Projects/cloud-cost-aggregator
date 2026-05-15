@@ -47,7 +47,49 @@ class GCPCollector(BaseCollector):
     @property
     def _billing_table_suffix(self) -> str:
         """Billing export tables replace dashes in account IDs with underscores."""
-        return self.config.billing_account_id.replace('-', '_')
+        return self.config.billing_account_ids[0].replace('-', '_')
+
+    @property
+    def _billing_table_suffixes(self) -> List[str]:
+        """Return table suffixes for all configured billing accounts."""
+        return [
+            billing_account_id.replace('-', '_')
+            for billing_account_id in self.config.billing_account_ids
+        ]
+
+    @staticmethod
+    def _sql_quote(value: str) -> str:
+        """Quote a string literal for the generated BigQuery SQL."""
+        return "'{}'".format(value.replace("'", "''"))
+
+    def _project_filter_sql(self) -> str:
+        """Build project filtering SQL, optionally scoped by billing account."""
+        if self.config.project_billing_account_map:
+            project_ids = set(self.config.cost_project_ids)
+            clauses = []
+            for project_id, billing_account_id in self.config.project_billing_account_map.items():
+                if project_ids and project_id not in project_ids:
+                    continue
+
+                clauses.append(
+                    "("
+                    f"billing_account_id = {self._sql_quote(billing_account_id)} "
+                    f"AND _TABLE_SUFFIX = {self._sql_quote(billing_account_id.replace('-', '_'))} "
+                    f"AND project.id = {self._sql_quote(project_id)}"
+                    ")"
+                )
+
+            if clauses:
+                return "\n                    AND ({})".format(" OR ".join(clauses))
+
+        if self.config.cost_project_ids:
+            project_ids = ", ".join(
+                self._sql_quote(project_id)
+                for project_id in self.config.cost_project_ids
+            )
+            return f"\n                    AND project.id IN ({project_ids})"
+
+        return ""
 
     def _initialize_client(self):
         """Initialize GCP BigQuery client"""
@@ -97,20 +139,37 @@ class GCPCollector(BaseCollector):
                 )
                 return True  # Dataset exists, just waiting for data
 
-            expected_table = f"gcp_billing_export_v1_{self._billing_table_suffix}"
-            if not any(table.table_id == expected_table for table in tables):
+            table_ids = {table.table_id for table in tables}
+            expected_tables = [
+                f"gcp_billing_export_v1_{table_suffix}"
+                for table_suffix in self._billing_table_suffixes
+            ]
+            missing_tables = [
+                expected_table
+                for expected_table in expected_tables
+                if expected_table not in table_ids
+            ]
+            if missing_tables:
                 self.logger.warning(
-                    f"GCP billing export table '{expected_table}' was not found in "
+                    f"GCP billing export tables {missing_tables} were not found in "
                     f"{self.config.billing_export_project_id}.{self.config.bigquery_dataset}. "
-                    "Verify the billing account ID and export destination."
+                    "Verify the billing account IDs and export destination."
                 )
 
             # Try to query the billing export table
+            billing_account_ids = ", ".join(
+                self._sql_quote(billing_account_id)
+                for billing_account_id in self.config.billing_account_ids
+            )
+            billing_table_suffixes = ", ".join(
+                self._sql_quote(table_suffix)
+                for table_suffix in self._billing_table_suffixes
+            )
             query = f"""
                 SELECT COUNT(*) as count
                 FROM `{self._billing_table_path}`
-                WHERE _TABLE_SUFFIX = '{self._billing_table_suffix}'
-                  AND billing_account_id = '{self.config.billing_account_id}'
+                WHERE _TABLE_SUFFIX IN ({billing_table_suffixes})
+                  AND billing_account_id IN ({billing_account_ids})
                 LIMIT 1
             """
 
@@ -153,9 +212,15 @@ class GCPCollector(BaseCollector):
             start_datetime = f"{start_date.strftime('%Y-%m-%d')}T00:00:00 US/Pacific"
             # Add one day to end_date for exclusive upper bound
             end_datetime = f"{(end_date + timedelta(days=1)).strftime('%Y-%m-%d')}T00:00:00 US/Pacific"
-            project_filter = ""
-            if self.config.cost_project_id:
-                project_filter = f"\n                    AND project.id = '{self.config.cost_project_id}'"
+            billing_account_ids = ", ".join(
+                self._sql_quote(billing_account_id)
+                for billing_account_id in self.config.billing_account_ids
+            )
+            billing_table_suffixes = ", ".join(
+                self._sql_quote(table_suffix)
+                for table_suffix in self._billing_table_suffixes
+            )
+            project_filter = self._project_filter_sql()
 
             query = f"""
                 WITH
@@ -192,8 +257,8 @@ class GCPCollector(BaseCollector):
                   FROM
                     `{self._billing_table_path}`
                   WHERE
-                    _TABLE_SUFFIX = '{self._billing_table_suffix}'
-                    AND billing_account_id = '{self.config.billing_account_id}'
+                    _TABLE_SUFFIX IN ({billing_table_suffixes})
+                    AND billing_account_id IN ({billing_account_ids})
                     AND cost_type != 'tax'
                     AND cost_type != 'adjustment'
                     AND usage_start_time >= '{start_datetime}'

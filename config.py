@@ -38,11 +38,12 @@ class AWSConfig:
 @dataclass
 class GCPConfig:
     """GCP configuration"""
-    billing_account_id: str
+    billing_account_ids: list[str]
     billing_export_project_id: str  # BigQuery project that hosts the billing export dataset
     credentials_path: str
     bigquery_dataset: str  # BigQuery dataset for billing export (e.g., "billing_export")
-    cost_project_id: str  # Optional GCP project to scope costs to
+    cost_project_ids: list[str]  # Optional GCP projects to scope costs to
+    project_billing_account_map: dict[str, str]  # Optional project -> billing account mapping
 
 
 @dataclass
@@ -98,8 +99,43 @@ class Config:
     @staticmethod
     def _load_gcp_config() -> GCPConfig:
         """Load GCP configuration from environment"""
+        billing_account_ids_raw = os.getenv(
+            'GCP_BILLING_ACCOUNT_IDS',
+            os.getenv('GCP_BILLING_ACCOUNT_ID', '')
+        )
+        billing_account_ids = [
+            billing_account_id.strip()
+            for billing_account_id in billing_account_ids_raw.split(',')
+            if billing_account_id.strip()
+        ]
+
+        cost_project_ids_raw = os.getenv(
+            'GCP_COST_PROJECT_IDS',
+            os.getenv('GCP_COST_PROJECT_ID', '')
+        )
+        cost_project_ids = [
+            project_id.strip()
+            for project_id in cost_project_ids_raw.split(',')
+            if project_id.strip()
+        ]
+
+        project_billing_account_map_raw = os.getenv('GCP_PROJECT_BILLING_ACCOUNT_MAP', '')
+        project_billing_account_map = {}
+        for item in project_billing_account_map_raw.split(','):
+            if not item.strip():
+                continue
+            project_id, separator, billing_account_id = item.partition(':')
+            if separator:
+                project_billing_account_map[project_id.strip()] = billing_account_id.strip()
+
+        billing_account_ids = list(dict.fromkeys(
+            billing_account_ids + list(project_billing_account_map.values())
+        ))
+        if not cost_project_ids and project_billing_account_map:
+            cost_project_ids = list(project_billing_account_map.keys())
+
         return GCPConfig(
-            billing_account_id=os.getenv('GCP_BILLING_ACCOUNT_ID', ''),
+            billing_account_ids=billing_account_ids,
             billing_export_project_id=os.getenv(
                 'GCP_BILLING_EXPORT_PROJECT_ID',
                 os.getenv('GCP_PROJECT_ID', '')
@@ -107,7 +143,8 @@ class Config:
             credentials_path=os.getenv('GCP_CREDENTIALS_PATH',
                                       os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')),
             bigquery_dataset=os.getenv('GCP_BIGQUERY_DATASET', 'billing_export'),
-            cost_project_id=os.getenv('GCP_COST_PROJECT_ID', '')
+            cost_project_ids=cost_project_ids,
+            project_billing_account_map=project_billing_account_map
         )
 
     @staticmethod
@@ -158,8 +195,8 @@ class Config:
             errors.append("AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) are required")
 
         # Validate GCP config
-        if not self.gcp.billing_account_id:
-            errors.append("GCP_BILLING_ACCOUNT_ID is required")
+        if not self.gcp.billing_account_ids:
+            errors.append("GCP_BILLING_ACCOUNT_IDS or GCP_BILLING_ACCOUNT_ID is required")
         if not self.gcp.billing_export_project_id:
             errors.append("GCP_BILLING_EXPORT_PROJECT_ID or GCP_PROJECT_ID is required")
         if not self.gcp.credentials_path:

@@ -117,11 +117,12 @@ AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 AWS_REGION=us-east-1
 
 # GCP Credentials
-GCP_BILLING_ACCOUNT_ID=XXXXXX-YYYYYY-ZZZZZZ
+GCP_BILLING_ACCOUNT_IDS=XXXXXX-YYYYYY-ZZZZZZ,AAAAAA-BBBBBB-CCCCCC
 GCP_BILLING_EXPORT_PROJECT_ID=your-billing-export-project-id
 GCP_CREDENTIALS_PATH=/path/to/service-account.json
 GCP_BIGQUERY_DATASET=billing_export
-GCP_COST_PROJECT_ID=your-claude-project-id
+GCP_COST_PROJECT_IDS=your-claude-project-id,another-project-id
+GCP_PROJECT_BILLING_ACCOUNT_MAP=your-claude-project-id:XXXXXX-YYYYYY-ZZZZZZ,another-project-id:AAAAAA-BBBBBB-CCCCCC
 
 # Azure Credentials
 AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -202,8 +203,11 @@ gcloud iam service-accounts keys create gcp-credentials.json \
 
 **Important**:
 - `GCP_BILLING_EXPORT_PROJECT_ID` is the BigQuery project that hosts the billing export dataset. This is what the code queries.
-- `GCP_BILLING_ACCOUNT_ID` identifies which billing account table to read from inside that dataset.
-- `GCP_COST_PROJECT_ID` should be set to the actual Claude workload project if you want costs scoped to one GCP project instead of every project attached to the billing account.
+- `GCP_BILLING_ACCOUNT_IDS` identifies which billing account tables to read from inside that dataset. Use a comma-separated list if tracked projects are billed through multiple billing accounts.
+- `GCP_BILLING_ACCOUNT_ID` is still supported as a backward-compatible alias for a single billing account.
+- `GCP_COST_PROJECT_IDS` should be set to the actual Claude workload project IDs if you want costs scoped to specific GCP projects instead of every project attached to the billing account. Use a comma-separated list for multiple projects.
+- `GCP_PROJECT_BILLING_ACCOUNT_MAP` should be set when tracked projects are spread across billing accounts. It prevents old/new billing account overlap from double counting migration days.
+- `GCP_COST_PROJECT_ID` is still supported as a backward-compatible alias for a single tracked project.
 - `GCP_PROJECT_ID` is still supported as a backward-compatible alias for `GCP_BILLING_EXPORT_PROJECT_ID`.
 
 **Note**: It can take up to 24 hours for billing data to appear in BigQuery after enabling export.
