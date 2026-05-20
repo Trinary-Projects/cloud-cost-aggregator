@@ -96,6 +96,7 @@ class AzureCollector(BaseCollector):
 
                 headers = self._get_headers()
                 response = requests.get(self.api_url, params=params, headers=headers, timeout=60)
+                self.logger.info(f"Azure response: {response.text}")
 
                 if response.status_code != 200:
                     self.logger.error(
