@@ -6,7 +6,6 @@ from datetime import date, timedelta
 from typing import List, Dict
 from decimal import Decimal
 import requests
-import json
 
 from collectors.base_collector import BaseCollector, CostRecord
 from config import AzureConfig
@@ -37,9 +36,9 @@ class AzureCollector(BaseCollector):
             True if connection successful, False otherwise
         """
         try:
-            # Test with a small date range
-            test_start = date.today() - timedelta(days=7)
-            test_end = date.today()
+            # The portal treats endDate as exclusive; use a one-day window.
+            test_start = date.today() - timedelta(days=1)
+            test_end = test_start + timedelta(days=1)
 
             params = {
                 'startDate': test_start.strftime('%Y-%m-%d'),
@@ -47,15 +46,9 @@ class AzureCollector(BaseCollector):
                 'subscriptionGuid': self.config.subscription_id
             }
 
-            headers = self._get_headers()
-            response = requests.get(self.api_url, params=params, headers=headers, timeout=30)
-
-            if response.status_code == 200:
-                self.logger.info("Azure Sponsorship API connection test successful")
-                return True
-            else:
-                self.logger.error(f"Azure connection test failed: HTTP {response.status_code}")
-                return False
+            self._fetch_usage_data(params=params, timeout=30)
+            self.logger.info("Azure Sponsorship API connection test successful")
+            return True
 
         except Exception as e:
             self.logger.error(f"Azure connection test failed: {e}")
@@ -90,22 +83,17 @@ class AzureCollector(BaseCollector):
 
                 params = {
                     'startDate': current_date.strftime('%Y-%m-%d'),
-                    'endDate': current_date.strftime('%Y-%m-%d'),
+                    'endDate': (current_date + timedelta(days=1)).strftime('%Y-%m-%d'),
                     'subscriptionGuid': self.config.subscription_id
                 }
 
-                headers = self._get_headers()
-                response = requests.get(self.api_url, params=params, headers=headers, timeout=60)
-                self.logger.info(f"Azure response: {response.text}")
-
-                if response.status_code != 200:
-                    self.logger.error(
-                        f"Azure API returned status {response.status_code} for {current_date}: {response.text}"
-                    )
+                try:
+                    data = self._fetch_usage_data(params=params, timeout=60)
+                except ValueError as e:
+                    self.logger.error(f"Azure API request failed for {current_date}: {e}")
                     current_date += timedelta(days=1)
                     continue
 
-                data = response.json()
                 daily_records = self._parse_response(data, current_date)
                 all_records.extend(daily_records)
 
@@ -131,14 +119,65 @@ class AzureCollector(BaseCollector):
             'Accept-Language': 'en-US,en;q=0.9',
             'Connection': 'keep-alive',
             'Cookie': self.config.sponsorship_cookies,
-            'DNT': '1',
+            'Priority': 'u=1, i',
             'Referer': 'https://www.microsoftazuresponsorships.com/Usage',
+            'Sec-Ch-Ua': '"Chromium";v="149", "Not)A;Brand";v="24"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"macOS"',
             'Sec-Fetch-Dest': 'empty',
             'Sec-Fetch-Mode': 'cors',
             'Sec-Fetch-Site': 'same-origin',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'User-Agent': (
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/149.0.0.0 Safari/537.36'
+            ),
             'X-Requested-With': 'XMLHttpRequest'
         }
+
+    def _fetch_usage_data(self, params: Dict[str, str], timeout: int) -> Dict:
+        """
+        Fetch Azure Sponsorship usage JSON and reject login redirects.
+
+        The sponsorship portal redirects expired sessions to Microsoft login.
+        `requests` follows redirects by default, which can turn an expired cookie
+        into an HTTP 200 HTML response. Keep redirects disabled so auth failures
+        are visible to the collector.
+        """
+        headers = self._get_headers()
+        response = requests.get(
+            self.api_url,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=False
+        )
+
+        redirect_location = response.headers.get('Location', '')
+        if 300 <= response.status_code < 400:
+            raise ValueError(
+                f"HTTP {response.status_code} redirect received. "
+                "Azure Sponsorship cookies are likely expired."
+            )
+
+        if response.status_code != 200:
+            raise ValueError(f"HTTP {response.status_code}: {response.text[:500]}")
+
+        content_type = response.headers.get('Content-Type', '')
+        if 'application/json' not in content_type.lower():
+            if 'login.microsoftonline.com' in redirect_location or 'Sign in to your account' in response.text:
+                raise ValueError("Azure Sponsorship cookies are expired; received login HTML.")
+            raise ValueError(f"Expected JSON response, got Content-Type {content_type!r}.")
+
+        try:
+            data = response.json()
+        except ValueError as e:
+            raise ValueError(f"Failed to parse Azure Sponsorship JSON response: {e}") from e
+
+        if not isinstance(data, dict) or 'TableRows' not in data:
+            raise ValueError("Azure Sponsorship response did not include TableRows.")
+
+        return data
 
     def _parse_response(
         self,
