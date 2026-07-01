@@ -42,6 +42,7 @@ class GCPConfig:
     billing_export_project_id: str  # BigQuery project that hosts the billing export dataset
     credentials_path: str
     bigquery_dataset: str  # BigQuery dataset for billing export (e.g., "billing_export")
+    billing_export_location_map: dict[str, tuple[str, str]]  # billing account -> (project, dataset)
     cost_project_ids: list[str]  # Optional GCP projects to scope costs to
     project_billing_account_map: dict[str, str]  # Optional project -> billing account mapping
 
@@ -128,21 +129,46 @@ class Config:
             if separator:
                 project_billing_account_map[project_id.strip()] = billing_account_id.strip()
 
+        billing_export_location_map_raw = os.getenv('GCP_BILLING_EXPORT_LOCATION_MAP', '')
+        billing_export_location_map = {}
+        for item in billing_export_location_map_raw.split(','):
+            if not item.strip():
+                continue
+
+            billing_account_id, separator, location = item.partition(':')
+            project_dataset = location.rsplit('.', 1)
+            if separator and len(project_dataset) == 2:
+                billing_export_location_map[billing_account_id.strip()] = (
+                    project_dataset[0].strip(),
+                    project_dataset[1].strip()
+                )
+
         billing_account_ids = list(dict.fromkeys(
-            billing_account_ids + list(project_billing_account_map.values())
+            billing_account_ids
+            + list(project_billing_account_map.values())
+            + list(billing_export_location_map.keys())
         ))
         if not cost_project_ids and project_billing_account_map:
             cost_project_ids = list(project_billing_account_map.keys())
 
+        billing_export_project_id = os.getenv(
+            'GCP_BILLING_EXPORT_PROJECT_ID',
+            os.getenv('GCP_PROJECT_ID', '')
+        )
+        bigquery_dataset = os.getenv('GCP_BIGQUERY_DATASET', 'billing_export')
+        for billing_account_id in billing_account_ids:
+            billing_export_location_map.setdefault(
+                billing_account_id,
+                (billing_export_project_id, bigquery_dataset)
+            )
+
         return GCPConfig(
             billing_account_ids=billing_account_ids,
-            billing_export_project_id=os.getenv(
-                'GCP_BILLING_EXPORT_PROJECT_ID',
-                os.getenv('GCP_PROJECT_ID', '')
-            ),
+            billing_export_project_id=billing_export_project_id,
             credentials_path=os.getenv('GCP_CREDENTIALS_PATH',
                                       os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '')),
-            bigquery_dataset=os.getenv('GCP_BIGQUERY_DATASET', 'billing_export'),
+            bigquery_dataset=bigquery_dataset,
+            billing_export_location_map=billing_export_location_map,
             cost_project_ids=cost_project_ids,
             project_billing_account_map=project_billing_account_map
         )

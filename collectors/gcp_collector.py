@@ -36,24 +36,34 @@ class GCPCollector(BaseCollector):
         self._initialize_client()
 
     @property
-    def _billing_table_path(self) -> str:
-        """Return the wildcard table path for billing export tables."""
-        return (
-            f"{self.config.billing_export_project_id}."
-            f"{self.config.bigquery_dataset}."
-            "gcp_billing_export_v1_*"
-        )
+    def _billing_export_sources(self) -> List[dict]:
+        """Return billing export table metadata for each configured account."""
+        sources = []
+        for billing_account_id in self.config.billing_account_ids:
+            project_id, dataset = self.config.billing_export_location_map.get(
+                billing_account_id,
+                (self.config.billing_export_project_id, self.config.bigquery_dataset)
+            )
+            sources.append({
+                'billing_account_id': billing_account_id,
+                'project_id': project_id,
+                'dataset': dataset,
+                'table_suffix': self._billing_table_suffix(billing_account_id),
+                'table_path': f"{project_id}.{dataset}.gcp_billing_export_v1_*",
+            })
 
-    @property
-    def _billing_table_suffix(self) -> str:
+        return sources
+
+    @staticmethod
+    def _billing_table_suffix(billing_account_id: str) -> str:
         """Billing export tables replace dashes in account IDs with underscores."""
-        return self.config.billing_account_ids[0].replace('-', '_')
+        return billing_account_id.replace('-', '_')
 
     @property
     def _billing_table_suffixes(self) -> List[str]:
         """Return table suffixes for all configured billing accounts."""
         return [
-            billing_account_id.replace('-', '_')
+            self._billing_table_suffix(billing_account_id)
             for billing_account_id in self.config.billing_account_ids
         ]
 
@@ -62,32 +72,29 @@ class GCPCollector(BaseCollector):
         """Quote a string literal for the generated BigQuery SQL."""
         return "'{}'".format(value.replace("'", "''"))
 
-    def _project_filter_sql(self) -> str:
-        """Build project filtering SQL, optionally scoped by billing account."""
+    def _project_filter_sql(self, billing_account_id: str) -> str:
+        """Build project filtering SQL for one billing account export source."""
         if self.config.project_billing_account_map:
-            project_ids = set(self.config.cost_project_ids)
-            clauses = []
-            for project_id, billing_account_id in self.config.project_billing_account_map.items():
-                if project_ids and project_id not in project_ids:
+            configured_project_ids = set(self.config.cost_project_ids)
+            project_ids = []
+            for project_id, mapped_billing_account_id in self.config.project_billing_account_map.items():
+                if mapped_billing_account_id != billing_account_id:
                     continue
+                if configured_project_ids and project_id not in configured_project_ids:
+                    continue
+                project_ids.append(project_id)
 
-                clauses.append(
-                    "("
-                    f"billing_account_id = {self._sql_quote(billing_account_id)} "
-                    f"AND _TABLE_SUFFIX = {self._sql_quote(billing_account_id.replace('-', '_'))} "
-                    f"AND project.id = {self._sql_quote(project_id)}"
-                    ")"
-                )
+            if not project_ids:
+                return "\n                    AND FALSE"
+        else:
+            project_ids = self.config.cost_project_ids
 
-            if clauses:
-                return "\n                    AND ({})".format(" OR ".join(clauses))
-
-        if self.config.cost_project_ids:
-            project_ids = ", ".join(
+        if project_ids:
+            quoted_project_ids = ", ".join(
                 self._sql_quote(project_id)
-                for project_id in self.config.cost_project_ids
+                for project_id in project_ids
             )
-            return f"\n                    AND project.id IN ({project_ids})"
+            return f"\n                    AND project.id IN ({quoted_project_ids})"
 
         return ""
 
@@ -120,61 +127,39 @@ class GCPCollector(BaseCollector):
             True if connection successful, False otherwise
         """
         try:
-            # First check if dataset exists
-            dataset_ref = self.client.get_dataset(
-                f"{self.config.billing_export_project_id}.{self.config.bigquery_dataset}"
-            )
-            self.logger.info(f"GCP BigQuery dataset '{self.config.bigquery_dataset}' exists")
+            for source in self._billing_export_sources:
+                dataset_path = f"{source['project_id']}.{source['dataset']}"
+                self.client.get_dataset(dataset_path)
+                self.logger.info(f"GCP BigQuery dataset '{dataset_path}' exists")
 
-            # Try to list tables in the dataset
-            tables = list(self.client.list_tables(
-                f"{self.config.billing_export_project_id}.{self.config.bigquery_dataset}"
-            ))
+                tables = list(self.client.list_tables(dataset_path))
+                table_ids = {table.table_id for table in tables}
+                expected_table = f"gcp_billing_export_v1_{source['table_suffix']}"
 
-            if not tables:
-                self.logger.warning(
-                    "No billing export tables found yet. "
-                    "It can take up to 24 hours for data to appear after enabling export. "
-                    "Expected table pattern: gcp_billing_export_v1_*"
-                )
-                return True  # Dataset exists, just waiting for data
+                if not tables:
+                    self.logger.warning(
+                        f"No billing export tables found yet in {dataset_path}. "
+                        "It can take up to 24 hours for data to appear after enabling export. "
+                        "Expected table pattern: gcp_billing_export_v1_*"
+                    )
+                    continue
 
-            table_ids = {table.table_id for table in tables}
-            expected_tables = [
-                f"gcp_billing_export_v1_{table_suffix}"
-                for table_suffix in self._billing_table_suffixes
-            ]
-            missing_tables = [
-                expected_table
-                for expected_table in expected_tables
-                if expected_table not in table_ids
-            ]
-            if missing_tables:
-                self.logger.warning(
-                    f"GCP billing export tables {missing_tables} were not found in "
-                    f"{self.config.billing_export_project_id}.{self.config.bigquery_dataset}. "
-                    "Verify the billing account IDs and export destination."
-                )
+                if expected_table not in table_ids:
+                    self.logger.warning(
+                        f"GCP billing export table {expected_table} was not found in "
+                        f"{dataset_path}. Verify the billing account ID and export destination."
+                    )
+                    continue
 
-            # Try to query the billing export table
-            billing_account_ids = ", ".join(
-                self._sql_quote(billing_account_id)
-                for billing_account_id in self.config.billing_account_ids
-            )
-            billing_table_suffixes = ", ".join(
-                self._sql_quote(table_suffix)
-                for table_suffix in self._billing_table_suffixes
-            )
-            query = f"""
-                SELECT COUNT(*) as count
-                FROM `{self._billing_table_path}`
-                WHERE _TABLE_SUFFIX IN ({billing_table_suffixes})
-                  AND billing_account_id IN ({billing_account_ids})
-                LIMIT 1
-            """
+                query = f"""
+                    SELECT COUNT(*) as count
+                    FROM `{source['table_path']}`
+                    WHERE _TABLE_SUFFIX = {self._sql_quote(source['table_suffix'])}
+                      AND billing_account_id = {self._sql_quote(source['billing_account_id'])}
+                    LIMIT 1
+                """
 
-            query_job = self.client.query(query)
-            results = list(query_job.result())
+                list(self.client.query(query).result())
 
             self.logger.info("GCP BigQuery connection test successful")
             return True
@@ -212,90 +197,110 @@ class GCPCollector(BaseCollector):
             start_datetime = f"{start_date.strftime('%Y-%m-%d')}T00:00:00 US/Pacific"
             # Add one day to end_date for exclusive upper bound
             end_datetime = f"{(end_date + timedelta(days=1)).strftime('%Y-%m-%d')}T00:00:00 US/Pacific"
-            billing_account_ids = ", ".join(
-                self._sql_quote(billing_account_id)
-                for billing_account_id in self.config.billing_account_ids
-            )
-            billing_table_suffixes = ", ".join(
-                self._sql_quote(table_suffix)
-                for table_suffix in self._billing_table_suffixes
-            )
-            project_filter = self._project_filter_sql()
 
-            query = f"""
-                WITH
-                  spend_cud_fee_skus AS (
-                  SELECT
-                    *
-                  FROM
-                    UNNEST(['5515-81A8-03A2']) AS fee_sku_id ),
-                  cost_data AS (
-                  SELECT
-                    *,
-                  IF
-                    (sku.id IN (
+            costs_by_day_and_service = {}
+            for source in self._billing_export_sources:
+                project_filter = self._project_filter_sql(source['billing_account_id'])
+                query = f"""
+                    WITH
+                      spend_cud_fee_skus AS (
                       SELECT
                         *
                       FROM
-                        spend_cud_fee_skus), cost, 0) AS `spend_cud_fee_cost`,
-                    cost - IFNULL(cost_at_effective_price_default, cost) AS `spend_cud_savings`,
-                    IFNULL(cost_at_effective_price_default, cost) - cost_at_list AS `negotiated_savings`,
-                    IFNULL( (
+                        UNNEST(['5515-81A8-03A2']) AS fee_sku_id ),
+                      cost_data AS (
                       SELECT
-                        SUM(CAST(c.amount AS NUMERIC))
+                        *,
+                      IF
+                        (sku.id IN (
+                          SELECT
+                            *
+                          FROM
+                            spend_cud_fee_skus), cost, 0) AS `spend_cud_fee_cost`,
+                        cost - IFNULL(cost_at_effective_price_default, cost) AS `spend_cud_savings`,
+                        IFNULL(cost_at_effective_price_default, cost) - cost_at_list AS `negotiated_savings`,
+                        IFNULL( (
+                          SELECT
+                            SUM(CAST(c.amount AS NUMERIC))
+                          FROM
+                            UNNEST(credits) c
+                          WHERE
+                            c.type IN ('FEE_UTILIZATION_OFFSET')), 0) AS `cud_credits`,
+                        IFNULL( (
+                          SELECT
+                            SUM(CAST(c.amount AS NUMERIC))
+                          FROM
+                            UNNEST(credits) c
+                          WHERE
+                            c.type IN ('SUSTAINED_USAGE_DISCOUNT', 'DISCOUNT')), 0) AS `other_savings`
                       FROM
-                        UNNEST(credits) c
+                        `{source['table_path']}`
                       WHERE
-                        c.type IN ('FEE_UTILIZATION_OFFSET')), 0) AS `cud_credits`,
-                    IFNULL( (
-                      SELECT
-                        SUM(CAST(c.amount AS NUMERIC))
-                      FROM
-                        UNNEST(credits) c
-                      WHERE
-                        c.type IN ('SUSTAINED_USAGE_DISCOUNT', 'DISCOUNT')), 0) AS `other_savings`
-                  FROM
-                    `{self._billing_table_path}`
-                  WHERE
-                    _TABLE_SUFFIX IN ({billing_table_suffixes})
-                    AND billing_account_id IN ({billing_account_ids})
-                    AND cost_type != 'tax'
-                    AND cost_type != 'adjustment'
-                    AND usage_start_time >= '{start_datetime}'
-                    AND usage_start_time < '{end_datetime}'{project_filter} )
-                SELECT
-                  DATE(TIMESTAMP_TRUNC(usage_start_time, Day, 'US/Pacific')) AS usage_date,
-                  service.description AS service_name,
-                  (SUM(CAST(cost AS NUMERIC)) + SUM(CAST(cud_credits AS NUMERIC)) + SUM(CAST(other_savings AS NUMERIC)))
-                    / (MAX(currency_conversion_rate) * 1.0) AS cost_usd
-                FROM
-                  cost_data
-                GROUP BY
-                  usage_date,
-                  service_name
-                HAVING
-                  cost_usd > 0
-                ORDER BY
-                  usage_date DESC,
-                  cost_usd DESC
-            """
+                        _TABLE_SUFFIX = {self._sql_quote(source['table_suffix'])}
+                        AND billing_account_id = {self._sql_quote(source['billing_account_id'])}
+                        AND cost_type != 'tax'
+                        AND cost_type != 'adjustment'
+                        AND usage_start_time >= '{start_datetime}'
+                        AND usage_start_time < '{end_datetime}'{project_filter} )
+                    SELECT
+                      DATE(TIMESTAMP_TRUNC(usage_start_time, Day, 'US/Pacific')) AS usage_date,
+                      service.description AS service_name,
+                      (SUM(CAST(cost AS NUMERIC)) + SUM(CAST(cud_credits AS NUMERIC)) + SUM(CAST(other_savings AS NUMERIC)))
+                        / (MAX(currency_conversion_rate) * 1.0) AS cost_usd
+                    FROM
+                      cost_data
+                    GROUP BY
+                      usage_date,
+                      service_name
+                    HAVING
+                      cost_usd > 0
+                    ORDER BY
+                      usage_date DESC,
+                      cost_usd DESC
+                """
 
-            self.logger.debug(f"Executing BigQuery query: {query}")
+                self.logger.debug(f"Executing BigQuery query: {query}")
 
-            # Execute query
-            query_job = self.client.query(query)
-            results = query_job.result()
+                try:
+                    query_job = self.client.query(query)
+                    results = query_job.result()
+                except GoogleAPIError as e:
+                    error_msg = str(e)
+                    if "does not match any table" in error_msg:
+                        self.logger.warning(
+                            f"GCP billing export table not found for "
+                            f"{source['billing_account_id']} in "
+                            f"{source['project_id']}.{source['dataset']}. "
+                            "It can take up to 24 hours for data to appear after enabling export."
+                        )
+                        continue
 
-            # Parse results
-            records = []
-            for row in results:
-                record = CostRecord(
+                    self.logger.error(
+                        f"Failed to collect GCP costs for {source['billing_account_id']} "
+                        f"from {source['project_id']}.{source['dataset']}: {e}"
+                    )
+                    continue
+
+                for row in results:
+                    service_name = row.service_name or 'Unknown'
+                    key = (row.usage_date, service_name)
+                    costs_by_day_and_service[key] = (
+                        costs_by_day_and_service.get(key, Decimal('0'))
+                        + Decimal(str(row.cost_usd))
+                    )
+
+            records = [
+                CostRecord(
                     cloud_provider='gcp',
-                    service_name=row.service_name or 'Unknown',
-                    cost_usd=self._normalize_cost(float(row.cost_usd)),
-                    usage_date=row.usage_date
+                    service_name=service_name,
+                    cost_usd=self._normalize_cost(float(cost_usd)),
+                    usage_date=usage_date
                 )
-                records.append(record)
+                for (usage_date, service_name), cost_usd
+                in costs_by_day_and_service.items()
+                if cost_usd > 0
+            ]
+            records.sort(key=lambda record: (record.usage_date, record.cost_usd), reverse=True)
 
             self._log_collection_summary(start_date, end_date, records)
 

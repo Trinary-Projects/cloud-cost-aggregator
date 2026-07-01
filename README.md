@@ -123,6 +123,7 @@ GCP_CREDENTIALS_PATH=/path/to/service-account.json
 GCP_BIGQUERY_DATASET=billing_export
 GCP_COST_PROJECT_IDS=your-claude-project-id,another-project-id
 GCP_PROJECT_BILLING_ACCOUNT_MAP=your-claude-project-id:XXXXXX-YYYYYY-ZZZZZZ,another-project-id:AAAAAA-BBBBBB-CCCCCC
+GCP_BILLING_EXPORT_LOCATION_MAP=XXXXXX-YYYYYY-ZZZZZZ:your-billing-export-project-id.billing_export,AAAAAA-BBBBBB-CCCCCC:another-export-project.another_billing_export_dataset
 
 # Azure Credentials
 AZURE_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -205,6 +206,7 @@ gcloud iam service-accounts keys create gcp-credentials.json \
 - `GCP_BILLING_EXPORT_PROJECT_ID` is the BigQuery project that hosts the billing export dataset. This is what the code queries.
 - `GCP_BILLING_ACCOUNT_IDS` identifies which billing account tables to read from inside that dataset. Use a comma-separated list if tracked projects are billed through multiple billing accounts.
 - `GCP_BILLING_ACCOUNT_ID` is still supported as a backward-compatible alias for a single billing account.
+- `GCP_BILLING_EXPORT_LOCATION_MAP` should be set when billing accounts export to different BigQuery project/dataset locations. Format: `billing-account-id:project.dataset,billing-account-id:project.dataset`. If omitted for an account, the collector falls back to `GCP_BILLING_EXPORT_PROJECT_ID.GCP_BIGQUERY_DATASET`.
 - `GCP_COST_PROJECT_IDS` should be set to the actual Claude workload project IDs if you want costs scoped to specific GCP projects instead of every project attached to the billing account. Use a comma-separated list for multiple projects.
 - `GCP_PROJECT_BILLING_ACCOUNT_MAP` should be set when tracked projects are spread across billing accounts. It prevents old/new billing account overlap from double counting migration days.
 - `GCP_COST_PROJECT_ID` is still supported as a backward-compatible alias for a single tracked project.

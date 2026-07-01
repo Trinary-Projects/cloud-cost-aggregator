@@ -71,6 +71,7 @@ GCP_CREDENTIALS_PATH=./gke-credentials.json
 GCP_BIGQUERY_DATASET=billing_export
 GCP_COST_PROJECT_IDS=your-claude-project-id,another-project-id
 GCP_PROJECT_BILLING_ACCOUNT_MAP=your-claude-project-id:XXXXXX-YYYYYY-ZZZZZZ,another-project-id:AAAAAA-BBBBBB-CCCCCC
+GCP_BILLING_EXPORT_LOCATION_MAP=XXXXXX-YYYYYY-ZZZZZZ:your-billing-export-project-id.billing_export,AAAAAA-BBBBBB-CCCCCC:another-export-project.another_billing_export_dataset
 
 # Azure Credentials
 AZURE_TENANT_ID=your-tenant-id
