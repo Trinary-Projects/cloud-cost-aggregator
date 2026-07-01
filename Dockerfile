@@ -18,9 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Copy production environment file as .env
-COPY .prod.env .env
-
 # Copy GCP credentials
 COPY gke-credentials.json .
 

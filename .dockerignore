@@ -35,6 +35,10 @@ Thumbs.db
 *.log
 logs/
 
+# Environment files are provided at runtime by docker-compose.
+.env
+.prod.env
+
 # Documentation
 README.md
 LICENSE
@@ -45,5 +49,4 @@ Dockerfile
 docker-compose.yml
 
 # Don't exclude these - we need them in the image
-!.prod.env
 !gke-credentials.json
