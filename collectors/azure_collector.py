@@ -36,9 +36,10 @@ class AzureCollector(BaseCollector):
             True if connection successful, False otherwise
         """
         try:
-            # The portal treats endDate as exclusive; use a one-day window.
+            # The portal returns inclusive date ranges. Use startDate == endDate
+            # to test exactly one usage day and avoid overlapping adjacent days.
             test_start = date.today() - timedelta(days=1)
-            test_end = test_start + timedelta(days=1)
+            test_end = test_start
 
             params = {
                 'startDate': test_start.strftime('%Y-%m-%d'),
@@ -62,6 +63,7 @@ class AzureCollector(BaseCollector):
         """
         Collect Azure Sponsorship costs for the specified date range
         Makes separate API calls for each day since API returns aggregated data
+        for the full inclusive date range requested.
 
         Args:
             start_date: Start date (inclusive)
@@ -76,14 +78,14 @@ class AzureCollector(BaseCollector):
             all_records = []
             current_date = start_date
 
-            # Azure API returns aggregated data for entire range
-            # So we need to call it separately for each day
+            # Azure API returns aggregated data for the full inclusive range.
+            # Request one exact day at a time to avoid double-counting.
             while current_date <= end_date:
                 self.logger.debug(f"Fetching Azure costs for {current_date}")
 
                 params = {
                     'startDate': current_date.strftime('%Y-%m-%d'),
-                    'endDate': (current_date + timedelta(days=1)).strftime('%Y-%m-%d'),
+                    'endDate': current_date.strftime('%Y-%m-%d'),
                     'subscriptionGuid': self.config.subscription_id
                 }
 
