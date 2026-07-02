@@ -90,7 +90,7 @@ class AzureCollector(BaseCollector):
                 }
 
                 try:
-                    data = self._fetch_usage_data(params=params, timeout=60)
+                    data = self._fetch_usage_data(params=params, timeout=120)
                 except ValueError as e:
                     self.logger.error(f"Azure API request failed for {current_date}: {e}")
                     current_date += timedelta(days=1)
@@ -147,13 +147,16 @@ class AzureCollector(BaseCollector):
         are visible to the collector.
         """
         headers = self._get_headers()
-        response = requests.get(
-            self.api_url,
-            params=params,
-            headers=headers,
-            timeout=timeout,
-            allow_redirects=False
-        )
+        try:
+            response = requests.get(
+                self.api_url,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=False
+            )
+        except requests.RequestException as e:
+            raise ValueError(f"Azure Sponsorship request failed: {e}") from e
 
         redirect_location = response.headers.get('Location', '')
         if 300 <= response.status_code < 400:
