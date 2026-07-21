@@ -289,6 +289,33 @@ class GCPCollector(BaseCollector):
                         + Decimal(str(row.cost_usd))
                     )
 
+            recovery_query = f"""
+                SELECT
+                  usage_date,
+                  service_description AS service_name,
+                  SUM(unrounded_subtotal_usd) AS cost_usd
+                FROM
+                  `disha-ai3.curelink_billing_export_multi.disha_ai2_billing_reports_recovery`
+                WHERE
+                  usage_date BETWEEN DATE '{start_date.isoformat()}' AND DATE '{end_date.isoformat()}'
+                  AND billing_account_id = '016F16-144AD7-8364DE'
+                  AND project_id = 'disha-ai2'
+                GROUP BY
+                  usage_date,
+                  service_name
+                HAVING
+                  cost_usd > 0
+            """
+            recovery_results = self.client.query(recovery_query).result()
+
+            for row in recovery_results:
+                service_name = row.service_name or 'Unknown'
+                key = (row.usage_date, service_name)
+                costs_by_day_and_service[key] = (
+                    costs_by_day_and_service.get(key, Decimal('0'))
+                    + Decimal(str(row.cost_usd))
+                )
+
             records = [
                 CostRecord(
                     cloud_provider='gcp',
